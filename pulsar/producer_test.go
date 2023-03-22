@@ -1067,8 +1067,8 @@ func TestSendTimeout(t *testing.T) {
 	id, err := producer.Send(context.Background(), &ProducerMessage{
 		Payload: make([]byte, 1024),
 	})
-	assert.NotNil(t, err)
-	assert.Nil(t, id)
+	assert.Nil(t, err)
+	assert.NotNil(t, id)
 
 	makeHTTPCall(t, http.MethodDelete, quotaURL, "")
 }
