@@ -242,6 +242,10 @@ type ConsumerOptions struct {
 	// NOTE: This option does not work if AckWithResponse is true
 	//	because there are only synchronous APIs for acknowledgment
 	AckGroupingOptions *AckGroupingOptions
+
+	// StartMessageIDInclusive, if true, the reader will start at the `StartMessageID`, included.
+	// Default is `false` and the reader will start from the "next" message
+	StartMessageIDInclusive bool
 }
 
 // Consumer is an interface that abstracts behavior of Pulsar's consumer

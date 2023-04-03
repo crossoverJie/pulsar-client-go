@@ -65,6 +65,8 @@ type consumer struct {
 
 	log     log.Logger
 	metrics *internal.LeveledMetrics
+
+	startMessageIDInclusive bool
 }
 
 func newConsumer(client *client, options ConsumerOptions) (Consumer, error) {
@@ -249,6 +251,7 @@ func newInternalConsumer(client *client, options ConsumerOptions, topic string,
 		rlq:                       rlq,
 		log:                       client.log.SubLogger(log.Fields{"topic": topic}),
 		consumerName:              options.Name,
+		startMessageIDInclusive:   options.StartMessageIDInclusive,
 		metrics:                   client.metrics.GetLeveledMetrics(topic),
 	}
 
@@ -400,6 +403,7 @@ func (c *consumer) internalTopicSubscribeToPartitions() error {
 				enableBatchIndexAck:         c.options.EnableBatchIndexAcknowledgment,
 				ackGroupingOptions:          c.options.AckGroupingOptions,
 				autoReceiverQueueSize:       c.options.EnableAutoScaledReceiverQueueSize,
+				startMessageIDInclusive:     c.startMessageIDInclusive,
 			}
 			cons, err := newPartitionConsumer(c, c.client, opts, c.messageCh, c.dlq, c.metrics)
 			ch <- ConsumerError{

@@ -1282,6 +1282,61 @@ func TestConsumerSeek(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("hello-%d", N-50), string(msg.Payload()))
 }
 
+func TestConsumerSeek2(t *testing.T) {
+	client, err := NewClient(ClientOptions{
+		URL:            "pulsar://192.168.88.38:6650",
+		Authentication: NewAuthenticationToken("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJwcm94eS1hZG1pbiJ9.B8yq1eWn2_WBHFjNwA7aZcnZZ5ko0c8ieCCN86Qw0z4nNYunqsS6RZOZ8Y4xmPkUvwuyrJ7JWngKOfa650WoKs6pYYFFO0wtjkrURM_KiB1UYcbHV8576vNOuukA7k6YOZRRVg5xL3rBEyF2yeexR3qVEWXLMfDmcw60KdN1llmvzj-qpX8kttX5x1ZEwC8L7ORraHZDA-QX6rYx6MEATpIiwLFM0eClpLsS1izyDSXtRVgfNTXFQi7p9fag4tOGQJPu73I9WcYQadZQLXOkEBV4w4ul7pkCNomsOkYoc5-um0c3vXm5R7qInKvETr6EXdGDH8WkuSYzv50bq74twQ"),
+	})
+	assert.Nil(t, err)
+	defer client.Close()
+
+	topicName := newTopicName()
+	ctx := context.Background()
+
+	producer, err := client.CreateProducer(ProducerOptions{
+		Topic:           topicName,
+		DisableBatching: false,
+	})
+	assert.Nil(t, err)
+	defer producer.Close()
+
+	consumer, err := client.Subscribe(ConsumerOptions{
+		Topic:            topicName,
+		SubscriptionName: "sub-1",
+	})
+	assert.Nil(t, err)
+	defer consumer.Close()
+
+	const N = 10
+	var seekID MessageID
+	for i := 0; i < N; i++ {
+		id, err := producer.Send(ctx, &ProducerMessage{
+			Payload: []byte(fmt.Sprintf("hello-%d", i)),
+		})
+		assert.Nil(t, err)
+
+		if i == 3 {
+			seekID = id
+		}
+	}
+
+	// Don't consume all messages so some stay in queues
+	for i := 0; i < 5; i++ {
+		msg, err := consumer.Receive(ctx)
+		assert.Nil(t, err)
+		assert.Equal(t, fmt.Sprintf("hello-%d", i), string(msg.Payload()))
+		consumer.Ack(msg)
+	}
+
+	err = consumer.Seek(seekID)
+	assert.Nil(t, err)
+
+	msg, err := consumer.Receive(ctx)
+	assert.Nil(t, err)
+	//assert.Equal(t, fmt.Sprintf("hello-%d", N-50), string(msg.Payload()))
+	fmt.Printf("msg_id=%s \n", msg.ID().String())
+}
+
 func TestConsumerSeekByTime(t *testing.T) {
 	client, err := NewClient(ClientOptions{
 		URL: lookupURL,
