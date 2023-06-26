@@ -20,12 +20,14 @@
 # Explicit version of Pulsar and Golang images should be
 # set via the Makefile or CLI
 ARG PULSAR_IMAGE=apachepulsar/pulsar:latest
-ARG GOLANG_IMAGE=golang:latest
+#ARG GOLANG_IMAGE=golang:latest
 
+#FROM $GOLANG_IMAGE
 FROM $PULSAR_IMAGE as pulsar
-FROM $GOLANG_IMAGE
+FROM $PULSAR_IMAGE
 
-RUN apt-get update && apt-get install -y ca-certificates-java openjdk-17-jre-headless
+USER root
+RUN apt-get update && apt-get install -y golang
 
 COPY --from=pulsar /pulsar /pulsar
 
