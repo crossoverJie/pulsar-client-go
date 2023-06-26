@@ -38,7 +38,7 @@ bin/golangci-lint:
 	GOBIN=$(shell pwd)/bin go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.51.2
 
 container:
-	docker build -t ${IMAGE_NAME} --build-arg GOLANG_IMAGE="${GOLANG_IMAGE}" \
+	docker build --no-cache -t ${IMAGE_NAME} --build-arg GOLANG_IMAGE="${GOLANG_IMAGE}" \
 	    --build-arg PULSAR_IMAGE="${PULSAR_IMAGE}" .
 
 test: container
