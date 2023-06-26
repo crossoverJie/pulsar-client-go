@@ -25,6 +25,8 @@ ARG GOLANG_IMAGE=golang:latest
 FROM $PULSAR_IMAGE as pulsar
 FROM $GOLANG_IMAGE
 
+RUN apt-get update && apt-get install -y ca-certificates openjdk-17-jre-headless
+
 COPY --from=pulsar /pulsar /pulsar
 
 ### Add pulsar config
