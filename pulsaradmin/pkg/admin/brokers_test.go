@@ -42,3 +42,12 @@ func TestBrokerHealthCheckWithTopicVersion(t *testing.T) {
 	err = admin.Brokers().HealthCheckWithTopicVersion(utils.TopicVersionV2)
 	assert.NoError(t, err)
 }
+
+func TestShutDownBrokerGracefully(t *testing.T) {
+	cfg := &config.Config{}
+	admin, err := New(cfg)
+	assert.NoError(t, err)
+	assert.NotNil(t, admin)
+	err = admin.Brokers().ShutDownBrokerGracefully(10, false)
+	assert.NoError(t, err)
+}

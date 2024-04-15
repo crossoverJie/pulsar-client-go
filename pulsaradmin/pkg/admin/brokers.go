@@ -20,6 +20,7 @@ package admin
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/apache/pulsar-client-go/pulsaradmin/pkg/utils"
@@ -58,6 +59,8 @@ type Brokers interface {
 
 	// HealthCheckWithTopicVersion run a health check on the broker
 	HealthCheckWithTopicVersion(utils.TopicVersion) error
+
+	ShutDownBrokerGracefully(maxConcurrentUnloadPerSec int, forcedTerminateTopic bool) error
 }
 
 type broker struct {
@@ -161,4 +164,12 @@ func (b *broker) HealthCheckWithTopicVersion(topicVersion utils.TopicVersion) er
 		return fmt.Errorf("health check returned unexpected result: %s", string(buf))
 	}
 	return nil
+}
+
+func (b *broker) ShutDownBrokerGracefully(maxConcurrentUnloadPerSec int, forcedTerminateTopic bool) error {
+	endpoint := b.pulsar.endpoint(b.basePath, "/shutdown")
+	return b.pulsar.Client.PostWithQueryParams(endpoint, nil, map[string]string{
+		"maxConcurrentUnloadPerSec": strconv.Itoa(maxConcurrentUnloadPerSec),
+		"forcedTerminateTopic":      strconv.FormatBool(forcedTerminateTopic),
+	})
 }
