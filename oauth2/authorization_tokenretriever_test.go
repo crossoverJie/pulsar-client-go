@@ -37,7 +37,7 @@ type MockTransport struct {
 
 var _ HTTPAuthTransport = &MockTransport{}
 
-func (t *MockTransport) Do(req *http.Request) (*http.Response, error) {
+func (t *MockTransport) Do(_ *http.Request) (*http.Response, error) {
 	if len(t.Responses) > 0 {
 		r := t.Responses[0]
 		t.Responses = t.Responses[1:]

@@ -186,5 +186,5 @@ func retryAssert(t assert.TestingT, times int, milliseconds int, update func(), 
 
 type fakeAssertT struct{}
 
-func (fa fakeAssertT) Errorf(format string, args ...interface{}) {
+func (fa fakeAssertT) Errorf(_ string, _ ...interface{}) {
 }

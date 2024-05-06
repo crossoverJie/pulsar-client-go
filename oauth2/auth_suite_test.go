@@ -52,7 +52,7 @@ func (te *MockTokenExchanger) ExchangeClientCredentials(req ClientCredentialsExc
 	return te.ReturnsTokens, te.ReturnsError
 }
 
-func (te *MockTokenExchanger) ExchangeDeviceCode(ctx context.Context,
+func (te *MockTokenExchanger) ExchangeDeviceCode(_ context.Context,
 	req DeviceCodeExchangeRequest) (*TokenResult, error) {
 	te.CalledWithRequest = &req
 	return te.ReturnsTokens, te.ReturnsError

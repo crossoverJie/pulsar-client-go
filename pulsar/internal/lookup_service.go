@@ -359,7 +359,7 @@ func (h *httpLookupService) GetTopicsOfNamespace(namespace string, mode GetTopic
 	return topics, nil
 }
 
-func (h *httpLookupService) GetSchema(topic string, schemaVersion []byte) (schema *pb.Schema, err error) {
+func (h *httpLookupService) GetSchema(_ string, _ []byte) (schema *pb.Schema, err error) {
 	return nil, errors.New("GetSchema is not supported by httpLookupService")
 }
 func (h *httpLookupService) Close() {

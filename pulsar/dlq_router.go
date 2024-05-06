@@ -117,7 +117,7 @@ func (r *dlqRouter) run() {
 				Properties:          properties,
 				EventTime:           msg.EventTime(),
 				ReplicationClusters: msg.replicationClusters,
-			}, func(messageID MessageID, producerMessage *ProducerMessage, err error) {
+			}, func(_ MessageID, _ *ProducerMessage, err error) {
 				if err == nil {
 					r.log.WithField("msgID", msgID).Debug("Succeed to send message to DLQ")
 					// The Producer ack might be coming from the connection go-routine that

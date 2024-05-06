@@ -57,7 +57,7 @@ func (c *mockedLookupRPCClient) NewConsumerID() uint64 {
 	return 1
 }
 
-func (c *mockedLookupRPCClient) RequestToAnyBroker(requestID uint64, cmdType pb.BaseCommand_Type,
+func (c *mockedLookupRPCClient) RequestToAnyBroker(_ uint64, cmdType pb.BaseCommand_Type,
 	message proto.Message) (*RPCResult, error) {
 	assert.Equal(c.t, cmdType, pb.BaseCommand_LOOKUP)
 
@@ -77,7 +77,7 @@ func (c *mockedLookupRPCClient) RequestToAnyBroker(requestID uint64, cmdType pb.
 	}, nil
 }
 
-func (c *mockedLookupRPCClient) Request(logicalAddr *url.URL, physicalAddr *url.URL, requestID uint64,
+func (c *mockedLookupRPCClient) Request(logicalAddr *url.URL, physicalAddr *url.URL, _ uint64,
 	cmdType pb.BaseCommand_Type, message proto.Message) (*RPCResult, error) {
 	assert.Equal(c.t, cmdType, pb.BaseCommand_LOOKUP)
 	expectedRequest := &c.expectedRequests[0]
@@ -99,14 +99,14 @@ func (c *mockedLookupRPCClient) Request(logicalAddr *url.URL, physicalAddr *url.
 	}, nil
 }
 
-func (c *mockedLookupRPCClient) RequestOnCnx(cnx Connection, requestID uint64, cmdType pb.BaseCommand_Type,
-	message proto.Message) (*RPCResult, error) {
+func (c *mockedLookupRPCClient) RequestOnCnx(_ Connection, _ uint64, _ pb.BaseCommand_Type,
+	_ proto.Message) (*RPCResult, error) {
 	assert.Fail(c.t, "Shouldn't be called")
 	return nil, nil
 }
 
-func (c *mockedLookupRPCClient) RequestOnCnxNoWait(cnx Connection, cmdType pb.BaseCommand_Type,
-	message proto.Message) error {
+func (c *mockedLookupRPCClient) RequestOnCnxNoWait(_ Connection, _ pb.BaseCommand_Type,
+	_ proto.Message) error {
 	assert.Fail(c.t, "Shouldn't be called")
 	return nil
 }
@@ -449,7 +449,7 @@ func (m mockedPartitionedTopicMetadataRPCClient) NewConsumerID() uint64 {
 }
 
 func (m mockedPartitionedTopicMetadataRPCClient) RequestToAnyBroker(requestID uint64, cmdType pb.BaseCommand_Type,
-	message proto.Message) (*RPCResult, error) {
+	_ proto.Message) (*RPCResult, error) {
 	assert.Equal(m.t, cmdType, pb.BaseCommand_PARTITIONED_METADATA)
 
 	expectedRequest := &m.expectedRequests[0]
@@ -468,20 +468,20 @@ func (m mockedPartitionedTopicMetadataRPCClient) RequestToAnyBroker(requestID ui
 	}, nil
 }
 
-func (m mockedPartitionedTopicMetadataRPCClient) Request(logicalAddr *url.URL, physicalAddr *url.URL, requestID uint64,
-	cmdType pb.BaseCommand_Type, message proto.Message) (*RPCResult, error) {
+func (m mockedPartitionedTopicMetadataRPCClient) Request(_ *url.URL, _ *url.URL, _ uint64,
+	_ pb.BaseCommand_Type, _ proto.Message) (*RPCResult, error) {
 	assert.Fail(m.t, "Shouldn't be called")
 	return nil, nil
 }
 
-func (m mockedPartitionedTopicMetadataRPCClient) RequestOnCnxNoWait(cnx Connection, cmdType pb.BaseCommand_Type,
-	message proto.Message) error {
+func (m mockedPartitionedTopicMetadataRPCClient) RequestOnCnxNoWait(_ Connection, _ pb.BaseCommand_Type,
+	_ proto.Message) error {
 	assert.Fail(m.t, "Shouldn't be called")
 	return nil
 }
 
-func (m mockedPartitionedTopicMetadataRPCClient) RequestOnCnx(cnx Connection, requestID uint64,
-	cmdType pb.BaseCommand_Type, message proto.Message) (*RPCResult, error) {
+func (m mockedPartitionedTopicMetadataRPCClient) RequestOnCnx(_ Connection, _ uint64,
+	_ pb.BaseCommand_Type, _ proto.Message) (*RPCResult, error) {
 	assert.Fail(m.t, "Shouldn't be called")
 	return nil, nil
 }
@@ -557,7 +557,7 @@ type MockHTTPClient struct {
 
 func (c *MockHTTPClient) Close() {}
 
-func (c *MockHTTPClient) Get(endpoint string, obj interface{}, params map[string]string) error {
+func (c *MockHTTPClient) Get(endpoint string, obj interface{}, _ map[string]string) error {
 	if strings.Contains(endpoint, HTTPLookupServiceBasePathV1) || strings.Contains(endpoint,
 		HTTPLookupServiceBasePathV2) {
 		return mockHTTPGetLookupResult(obj)

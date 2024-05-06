@@ -26,6 +26,7 @@ CONTAINER_ARCH ?= $(shell uname -m | sed s/x86_64/amd64/)
 # Golang standard bin directory.
 GOPATH ?= $(shell go env GOPATH)
 GOROOT ?= $(shell go env GOROOT)
+GOLANGCI_LINT_VERSION ?= v1.58.0
 
 build:
 	go build ./pulsar
@@ -36,13 +37,13 @@ lint: bin/golangci-lint
 	bin/golangci-lint run
 
 bin/golangci-lint:
-	GOBIN=$(shell pwd)/bin go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.51.2
+	GOBIN=$(shell pwd)/bin go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 # an alternative to above `make lint` command
 # use golangCi-lint docker to avoid local golang env issues
 # https://golangci-lint.run/welcome/install/
 lint-docker:
-	docker run --rm -v $(shell pwd):/app -w /app golangci/golangci-lint:v1.51.2 golangci-lint run -v
+	docker run --rm -v $(shell pwd):/app -w /app golangci/golangci-lint:$(GOLANGCI_LINT_VERSION) golangci-lint run -v
 
 container:
 	docker build -t ${IMAGE_NAME} \

@@ -765,18 +765,18 @@ func (pc *partitionConsumer) NackMsg(msg Message) {
 	pc.metrics.NacksCounter.Inc()
 }
 
-func (pc *partitionConsumer) Redeliver(msgIds []messageID) {
+func (pc *partitionConsumer) Redeliver(msgIDs []messageID) {
 	if state := pc.getConsumerState(); state == consumerClosed || state == consumerClosing {
 		pc.log.WithField("state", state).Error("Failed to redeliver closing or closed consumer")
 		return
 	}
-	pc.eventsCh <- &redeliveryRequest{msgIds}
+	pc.eventsCh <- &redeliveryRequest{msgIDs}
 
-	iMsgIds := make([]MessageID, len(msgIds))
-	for i := range iMsgIds {
-		iMsgIds[i] = &msgIds[i]
+	iMsgIDs := make([]MessageID, len(msgIDs))
+	for i := range iMsgIDs {
+		iMsgIDs[i] = &msgIDs[i]
 	}
-	pc.options.interceptors.OnNegativeAcksSend(pc.parentConsumer, iMsgIds)
+	pc.options.interceptors.OnNegativeAcksSend(pc.parentConsumer, iMsgIDs)
 }
 
 func (pc *partitionConsumer) internalRedeliver(req *redeliveryRequest) {
@@ -784,14 +784,14 @@ func (pc *partitionConsumer) internalRedeliver(req *redeliveryRequest) {
 		pc.log.WithField("state", state).Error("Failed to redeliver closing or closed consumer")
 		return
 	}
-	msgIds := req.msgIds
-	pc.log.Debug("Request redelivery after negative ack for messages", msgIds)
+	msgIDs := req.msgIDs
+	pc.log.Debug("Request redelivery after negative ack for messages", msgIDs)
 
-	msgIDDataList := make([]*pb.MessageIdData, len(msgIds))
-	for i := 0; i < len(msgIds); i++ {
+	msgIDDataList := make([]*pb.MessageIdData, len(msgIDs))
+	for i := 0; i < len(msgIDs); i++ {
 		msgIDDataList[i] = &pb.MessageIdData{
-			LedgerId: proto.Uint64(uint64(msgIds[i].ledgerID)),
-			EntryId:  proto.Uint64(uint64(msgIds[i].entryID)),
+			LedgerId: proto.Uint64(uint64(msgIDs[i].ledgerID)),
+			EntryId:  proto.Uint64(uint64(msgIDs[i].entryID)),
 		}
 	}
 
@@ -1540,7 +1540,7 @@ type closeRequest struct {
 }
 
 type redeliveryRequest struct {
-	msgIds []messageID
+	msgIDs []messageID
 }
 
 type getLastMsgIDRequest struct {

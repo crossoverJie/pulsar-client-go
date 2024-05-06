@@ -1035,7 +1035,7 @@ func (p *partitionProducer) Send(ctx context.Context, msg *ProducerMessage) (Mes
 	isDone := uAtomic.NewBool(false)
 	doneCh := make(chan struct{})
 
-	p.internalSendAsync(ctx, msg, func(ID MessageID, message *ProducerMessage, e error) {
+	p.internalSendAsync(ctx, msg, func(ID MessageID, _ *ProducerMessage, e error) {
 		if isDone.CAS(false, true) {
 			err = e
 			msgID = ID
