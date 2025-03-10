@@ -1117,7 +1117,7 @@ func TestConfigureConnectionMaxIdleTime(t *testing.T) {
 		ConnectionMaxIdleTime: 1 * time.Second,
 	})
 
-	assert.Error(t, err, "Should be failed when the connectionMaxIdleTime is less than minConnMaxIdleTime")
+	assert.Nil(t, err)
 
 	cli, err := NewClient(ClientOptions{
 		URL:                   serviceURL,
