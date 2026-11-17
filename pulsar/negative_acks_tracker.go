@@ -154,44 +154,57 @@ func (t *negativeAcksTracker) track() {
 			return
 
 		case <-t.tick.C:
-			{
-				now := time.Now()
-				msgIDs := make([]messageID, 0)
-
-				t.Lock()
-
-				iterator := t.negativeAcks.Iterator()
-				for iterator.Next() {
-					targetTime := iterator.Key().(time.Time)
-					// because use ordered map, so we can early break
-					if targetTime.After(now) {
-						break
-					}
-
-					ledgerMap := iterator.Value().(map[ledgerID]*roaring64.Bitmap)
-					for ledgerID, entrySet := range ledgerMap {
-						for _, entryID := range entrySet.ToArray() {
-							msgID := messageID{
-								ledgerID: ledgerID,
-								entryID:  int64(entryID),
-								batchIdx: 0,
-							}
-							msgIDs = append(msgIDs, msgID)
-						}
-					}
-
-					// Safe deletion during iteration
-					t.negativeAcks.Remove(targetTime)
-				}
-
-				t.Unlock()
-
-				if len(msgIDs) > 0 {
-					t.rc.Redeliver(msgIDs)
-				}
+			msgIDs := t.drainExpired(time.Now())
+			if len(msgIDs) > 0 {
+				t.rc.Redeliver(msgIDs)
 			}
 		}
 	}
+}
+
+// drainExpired removes every entry that is due at now and returns the message
+// IDs that have to be redelivered.
+func (t *negativeAcksTracker) drainExpired(now time.Time) []messageID {
+	t.Lock()
+	defer t.Unlock()
+
+	msgIDs := make([]messageID, 0)
+
+	// Collect the due entries while iterating and remove them only after the
+	// iteration: the AVL tree iterator advances through the current node's own
+	// child/parent pointers, so removing the current node while iterating makes
+	// it follow stale pointers afterwards. The remaining due entries are then
+	// skipped or visited out of order, so a single scan drains only part of
+	// them and the rest is delayed to the following ticks.
+	dueKeys := make([]time.Time, 0, 1)
+	iterator := t.negativeAcks.Iterator()
+	for iterator.Next() {
+		targetTime := iterator.Key().(time.Time)
+		// because use ordered map, so we can early break
+		if targetTime.After(now) {
+			break
+		}
+
+		ledgerMap := iterator.Value().(map[ledgerID]*roaring64.Bitmap)
+		for ledgerID, entrySet := range ledgerMap {
+			for _, entryID := range entrySet.ToArray() {
+				msgID := messageID{
+					ledgerID: ledgerID,
+					entryID:  int64(entryID),
+					batchIdx: 0,
+				}
+				msgIDs = append(msgIDs, msgID)
+			}
+		}
+
+		dueKeys = append(dueKeys, targetTime)
+	}
+
+	for _, targetTime := range dueKeys {
+		t.negativeAcks.Remove(targetTime)
+	}
+
+	return msgIDs
 }
 
 func (t *negativeAcksTracker) Close() {
