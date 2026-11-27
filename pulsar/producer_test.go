@@ -2848,6 +2848,10 @@ func (m *mockConn) SendRequest(requestID uint64, req *pb.BaseCommand, callback f
 	m.realConn.SendRequest(requestID, req, callback)
 }
 
+func (m *mockConn) CloseRequest(requestID uint64, err error) {
+	m.realConn.CloseRequest(requestID, err)
+}
+
 func (m *mockConn) getBuffersLen() int {
 	m.l.Lock()
 	defer m.l.Unlock()
@@ -3016,6 +3020,11 @@ func testSendAsyncCouldTimeoutWhileReconnecting(t *testing.T, isDisableBatching 
 
 type mockRPCClient struct {
 	internal.RPCClient
+}
+
+func (m *mockRPCClient) RequestOnCnxWithContext(_ context.Context, cnx internal.Connection, reqID uint64,
+	cmdType pb.BaseCommand_Type, msg proto.Message) (*internal.RPCResult, error) {
+	return m.RequestOnCnx(cnx, reqID, cmdType, msg)
 }
 
 func (m *mockRPCClient) RequestOnCnx(_ internal.Connection, _ uint64, _ pb.BaseCommand_Type,

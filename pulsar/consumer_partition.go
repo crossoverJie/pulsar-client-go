@@ -187,6 +187,15 @@ type ConsumerEventListener interface {
 	BecameInactive(consumer Consumer, topicName string, partition int32)
 }
 
+// inflightAckRequest is the ack-with-response currently being waited for
+// by the events loop.
+type inflightAckRequest struct {
+	requestID uint64
+	cnx       internal.Connection
+}
+
+var errAckConsumerClosed = errors.New("consumer closed before ack response was received")
+
 type partitionConsumer struct {
 	client *client
 
@@ -197,6 +206,14 @@ type partitionConsumer struct {
 
 	conn         atomic.Pointer[internal.Connection]
 	cnxKeySuffix int32
+
+	inflightAck atomic.Pointer[inflightAckRequest]
+	// Connections on which the broker closed this consumer. Acks that would
+	// go out on them fail fast with errAckConsumerClosed instead of waiting
+	// for a broker that no longer answers. grabConn takes them before it
+	// registers a new subscription and puts them back if that fails.
+	closedAckConnsMu sync.Mutex
+	closedAckConns   map[internal.Connection]struct{}
 
 	topic        string
 	name         string
@@ -245,7 +262,8 @@ type partitionConsumer struct {
 
 	lastMessageInBroker *trackingMessageID
 
-	redirectedClusterURI string
+	redirectedClusterURI atomic.Pointer[string]
+	connectCanceler      connectCanceler
 	backoffPolicyFunc    func() backoff.Policy
 
 	dispatcherSeekingControlCh chan struct{}
@@ -516,6 +534,11 @@ func newPartitionConsumer(parent Consumer, client *client, options *partitionCon
 		options.nackPrecisionBit)
 
 	err := pc.grabConn("")
+	if errors.Is(err, errBrokerClosedDuringConnect) && pc.getRedirectedClusterURI() != "" {
+		// The broker redirected this consumer to a migrated cluster while handling
+		// the initial CommandSubscribe request; retry once against the migrated cluster.
+		err = pc.grabConn("")
+	}
 	if err != nil {
 		pc.log.WithError(err).Error("Failed to create consumer")
 		pc.nackTracker.Close()
@@ -702,7 +725,17 @@ func (pc *partitionConsumer) internalAckWithTxn(req *ackWithTxnRequest) {
 	}
 
 	cmdAck.RequestId = proto.Uint64(reqID)
-	_, err := pc.client.rpcClient.RequestOnCnx(pc._getConn(), reqID, pb.BaseCommand_ACK, cmdAck)
+	cnx := pc._getConn()
+	pc.inflightAck.Store(&inflightAckRequest{requestID: reqID, cnx: cnx})
+	if pc.connClosedForAck(cnx) {
+		pc.inflightAck.Store(nil)
+		pc.log.Debug("Skip ack on a connection that closed this consumer")
+		req.Transaction.endSendOrAckOp(errAckConsumerClosed)
+		req.err = errAckConsumerClosed
+		return
+	}
+	_, err := pc.client.rpcClient.RequestOnCnx(cnx, reqID, pb.BaseCommand_ACK, cmdAck)
+	pc.inflightAck.Store(nil)
 	if err != nil {
 		pc.log.WithError(err).Error("Ack with response error")
 	}
@@ -1270,7 +1303,18 @@ func (pc *partitionConsumer) internalAck(req *ackRequest) {
 
 	if pc.options.ackWithResponse {
 		cmdAck.RequestId = proto.Uint64(reqID)
-		_, err := pc.client.rpcClient.RequestOnCnx(pc._getConn(), reqID, pb.BaseCommand_ACK, cmdAck)
+		cnx := pc._getConn()
+		pc.inflightAck.Store(&inflightAckRequest{requestID: reqID, cnx: cnx})
+		// Checked after the store so a close landing in between is still
+		// caught by ConnectionClosed.
+		if pc.connClosedForAck(cnx) {
+			pc.inflightAck.Store(nil)
+			pc.log.Debug("Skip ack on a connection that closed this consumer")
+			req.err = errAckConsumerClosed
+			return
+		}
+		_, err := pc.client.rpcClient.RequestOnCnx(cnx, reqID, pb.BaseCommand_ACK, cmdAck)
+		pc.inflightAck.Store(nil)
 		if err != nil {
 			pc.log.WithError(err).Error("Ack with response error")
 			req.err = err
@@ -1288,12 +1332,21 @@ func (pc *partitionConsumer) internalAck(req *ackRequest) {
 func (pc *partitionConsumer) internalAckList(request *ackListRequest) {
 	if request.errCh != nil {
 		reqID := pc.client.rpcClient.NewRequestID()
-		_, err := pc.client.rpcClient.RequestOnCnx(pc._getConn(), reqID, pb.BaseCommand_ACK, &pb.CommandAck{
+		cnx := pc._getConn()
+		pc.inflightAck.Store(&inflightAckRequest{requestID: reqID, cnx: cnx})
+		if pc.connClosedForAck(cnx) {
+			pc.inflightAck.Store(nil)
+			pc.log.Debug("Skip ack list on a connection that closed this consumer")
+			request.errCh <- errAckConsumerClosed
+			return
+		}
+		_, err := pc.client.rpcClient.RequestOnCnx(cnx, reqID, pb.BaseCommand_ACK, &pb.CommandAck{
 			AckType:    pb.CommandAck_Individual.Enum(),
 			ConsumerId: proto.Uint64(pc.consumerID),
 			MessageId:  request.msgIDs,
 			RequestId:  &reqID,
 		})
+		pc.inflightAck.Store(nil)
 		request.errCh <- err
 		return
 	}
@@ -1817,14 +1870,82 @@ func createEncryptionContext(msgMeta *pb.MessageMetadata) *EncryptionContext {
 	return &encCtx
 }
 
-func (pc *partitionConsumer) ConnectionClosed(closeConsumer *pb.CommandCloseConsumer) {
+func (pc *partitionConsumer) markConnClosedForAck(cnx internal.Connection) {
+	pc.closedAckConnsMu.Lock()
+	defer pc.closedAckConnsMu.Unlock()
+	if pc.closedAckConns == nil {
+		pc.closedAckConns = make(map[internal.Connection]struct{})
+	}
+	pc.closedAckConns[cnx] = struct{}{}
+}
+
+func (pc *partitionConsumer) connClosedForAck(cnx internal.Connection) bool {
+	pc.closedAckConnsMu.Lock()
+	defer pc.closedAckConnsMu.Unlock()
+	_, ok := pc.closedAckConns[cnx]
+	return ok
+}
+
+// takeClosedAckConns removes and returns every close marker. grabConn takes
+// them before registering the handler of a new subscription: the pool may hand
+// back the connection the broker closed the consumer on (CLOSE_CONSUMER keeps
+// the connection open), and a close of the new subscription can only be
+// delivered once its handler exists, so nothing valid is dropped.
+func (pc *partitionConsumer) takeClosedAckConns() []internal.Connection {
+	pc.closedAckConnsMu.Lock()
+	defer pc.closedAckConnsMu.Unlock()
+	conns := make([]internal.Connection, 0, len(pc.closedAckConns))
+	for c := range pc.closedAckConns {
+		conns = append(conns, c)
+	}
+	pc.closedAckConns = nil
+	return conns
+}
+
+// restoreClosedAckConns puts back the markers taken by takeClosedAckConns
+// when the reconnect that took them fails, so acks queued behind it still
+// fail fast.
+func (pc *partitionConsumer) restoreClosedAckConns(conns []internal.Connection) {
+	if len(conns) == 0 {
+		return
+	}
+	pc.closedAckConnsMu.Lock()
+	defer pc.closedAckConnsMu.Unlock()
+	if pc.closedAckConns == nil {
+		pc.closedAckConns = make(map[internal.Connection]struct{}, len(conns))
+	}
+	for _, c := range conns {
+		pc.closedAckConns[c] = struct{}{}
+	}
+}
+
+func (pc *partitionConsumer) ConnectionClosed(cnx internal.Connection, closeConsumer *pb.CommandCloseConsumer) {
 	// Trigger reconnection in the consumer goroutine
 	pc.log.Debug("connection closed and send to connectClosedCh")
 	pc.reconnectCount.Inc()
+
+	// If a CommandSubscribe RPC is currently in flight (for example, the broker sent
+	// CommandTopicMigrated + CommandCloseConsumer instead of a CommandSubscribe response),
+	// cancel its context immediately so grabConn does not stall until OperationTimeout.
+	if closeConsumer != nil && pc.connectCanceler.cancelInFlight(errBrokerClosedDuringConnect) {
+		return
+	}
+
 	var assignedBrokerURL string
 	if closeConsumer != nil {
 		assignedBrokerURL = pc.client.selectServiceURL(
 			closeConsumer.GetAssignedBrokerServiceUrl(), closeConsumer.GetAssignedBrokerServiceUrlTls())
+	}
+
+	// The broker does not always answer in-flight acks when it closes the
+	// consumer, so fail the wait instead of waiting for the timeout. The
+	// marker is set before the reconnect is signalled: grabConn takes the
+	// markers, so one landing after that would outlive the re-subscribe.
+	if closeConsumer != nil {
+		pc.markConnClosedForAck(cnx)
+		if ack := pc.inflightAck.Load(); ack != nil && ack.cnx == cnx {
+			cnx.CloseRequest(ack.requestID, errAckConsumerClosed)
+		}
 	}
 
 	select {
@@ -1836,7 +1957,15 @@ func (pc *partitionConsumer) ConnectionClosed(closeConsumer *pb.CommandCloseCons
 }
 
 func (pc *partitionConsumer) SetRedirectedClusterURI(redirectedClusterURI string) {
-	pc.redirectedClusterURI = redirectedClusterURI
+	uri := redirectedClusterURI
+	pc.redirectedClusterURI.Store(&uri)
+}
+
+func (pc *partitionConsumer) getRedirectedClusterURI() string {
+	if uri := pc.redirectedClusterURI.Load(); uri != nil {
+		return *uri
+	}
+	return ""
 }
 
 func (pc *partitionConsumer) pause() {
@@ -2208,6 +2337,28 @@ func (pc *partitionConsumer) reconnectToBroker(connectionClosed *connectionClose
 		assignedBrokerURL = connectionClosed.assignedBrokerURL
 	}
 
+	if maxRetry == 0 || pc.getConsumerState() != consumerReady {
+		return
+	}
+
+	// Match Java client's ConnectionHandler.connectionClosed behavior:
+	// when the broker did not assign a target broker URL, wait one initial backoff
+	// before the first reconnect attempt instead of immediately reconnecting.
+	if assignedBrokerURL == "" {
+		initialDelay := bo.Next()
+		pc.log.WithFields(log.Fields{
+			"assignedBrokerURL":  assignedBrokerURL,
+			"delayReconnectTime": initialDelay,
+		}).Info("Reconnecting to broker")
+		timer := time.NewTimer(initialDelay)
+		select {
+		case <-pc.ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+
 	var giveUpNotified bool
 	notifyReconnectGiveUp := func(cause error) {
 		if giveUpNotified {
@@ -2221,7 +2372,9 @@ func (pc *partitionConsumer) reconnectToBroker(connectionClosed *connectionClose
 		}
 	}
 
+	var redirectedDuringAttempt bool
 	opFn := func() (struct{}, error) {
+		redirectedDuringAttempt = false
 		if maxRetry == 0 {
 			return struct{}{}, nil
 		}
@@ -2232,6 +2385,7 @@ func (pc *partitionConsumer) reconnectToBroker(connectionClosed *connectionClose
 			return struct{}{}, nil
 		}
 
+		redirectedBeforeAttempt := pc.getRedirectedClusterURI()
 		err := pc.grabConn(assignedBrokerURL)
 		if assignedBrokerURL != "" {
 			// Attempt connecting to the assigned broker just once
@@ -2245,6 +2399,14 @@ func (pc *partitionConsumer) reconnectToBroker(connectionClosed *connectionClose
 				pc.options.zeroQueueReconnectedPolicy(pc)
 			}
 			return struct{}{}, nil
+		}
+		redirectedAfterAttempt := pc.getRedirectedClusterURI()
+		if errors.Is(err, errBrokerClosedDuringConnect) &&
+			redirectedAfterAttempt != "" && redirectedAfterAttempt != redirectedBeforeAttempt {
+			redirectedDuringAttempt = true
+			pc.log.WithField("redirectedClusterURI", redirectedAfterAttempt).
+				Info("Consumer redirected to migrated cluster during reconnect, retrying")
+			return struct{}{}, err
 		}
 		pc.log.WithError(err).Error("Failed to create consumer at reconnect")
 		if isNonRetriableSubscribeError(err) {
@@ -2266,6 +2428,9 @@ func (pc *partitionConsumer) reconnectToBroker(connectionClosed *connectionClose
 		return struct{}{}, err
 	}
 	_, _ = internal.Retry(pc.ctx, opFn, func(_ error) time.Duration {
+		if redirectedDuringAttempt {
+			return 0
+		}
 		delayReconnectTime := bo.Next()
 		pc.log.WithFields(log.Fields{
 			"assignedBrokerURL":  assignedBrokerURL,
@@ -2276,8 +2441,9 @@ func (pc *partitionConsumer) reconnectToBroker(connectionClosed *connectionClose
 }
 
 func (pc *partitionConsumer) lookupTopic(brokerServiceURL string) (*internal.LookupResult, error) {
+	redirectedURI := pc.getRedirectedClusterURI()
 	if len(brokerServiceURL) == 0 {
-		lookupService, err := pc.client.rpcClient.LookupService(pc.redirectedClusterURI)
+		lookupService, err := pc.client.rpcClient.LookupService(redirectedURI)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get lookup service: %w", err)
 		}
@@ -2290,7 +2456,11 @@ func (pc *partitionConsumer) lookupTopic(brokerServiceURL string) (*internal.Loo
 		pc.log.Debug("Lookup result: ", lr)
 		return lr, err
 	}
-	return pc.client.lookupService.GetBrokerAddress(brokerServiceURL, pc._getConn().IsProxied())
+	lookupService, err := pc.client.rpcClient.LookupService(redirectedURI)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get lookup service: %w", err)
+	}
+	return lookupService.GetBrokerAddress(brokerServiceURL, pc._getConn().IsProxied())
 }
 
 func (pc *partitionConsumer) grabConn(assignedBrokerURL string) error {
@@ -2393,17 +2563,31 @@ func (pc *partitionConsumer) grabConn(assignedBrokerURL string) error {
 		}
 	}
 
-	// Register handler BEFORE the subscribe RPC so no frames are missed
+	// Register handler BEFORE the subscribe RPC so no frames are missed.
+	// The close markers are taken first: the pool may hand back the very
+	// connection the broker closed the consumer on, and leaving its marker
+	// would fail every ack from now on. A close of the new subscription can
+	// only be delivered after the handler exists, so it is not wiped; a
+	// failed attempt puts the markers back.
+	closedAckConns := pc.takeClosedAckConns()
+	connectCtx, finishConnect := pc.connectCanceler.start(pc.ctx)
 	err = cnx.AddConsumeHandler(pc.consumerID, pc)
 	if err != nil {
+		finishConnect()
+		pc.restoreClosedAckConns(closedAckConns)
 		restoreConn()
 		pc.log.WithError(err).Error("Failed to add consumer handler")
 		return err
 	}
 
-	res, err := pc.client.rpcClient.RequestOnCnx(cnx, requestID, pb.BaseCommand_SUBSCRIBE, cmdSubscribe)
+	res, err := pc.client.rpcClient.RequestOnCnxWithContext(
+		connectCtx, cnx, requestID, pb.BaseCommand_SUBSCRIBE, cmdSubscribe)
+	if cancelled := finishConnect(); err == nil && cancelled {
+		err = errBrokerClosedDuringConnect
+	}
 	if err != nil {
 		cnx.DeleteConsumeHandler(pc.consumerID)
+		pc.restoreClosedAckConns(closedAckConns)
 		restoreConn()
 		pc.log.WithError(err).Error("Failed to create consumer")
 		if err == internal.ErrRequestTimeOut {
@@ -2435,8 +2619,10 @@ func (pc *partitionConsumer) grabConn(assignedBrokerURL string) error {
 		return nil
 	case pb.BaseCommand_ERROR:
 		errMsg := res.Response.GetError()
+		pc.restoreClosedAckConns(closedAckConns)
 		return fmt.Errorf("%s: %s", errMsg.GetError().String(), errMsg.GetMessage())
 	default:
+		pc.restoreClosedAckConns(closedAckConns)
 		return newUnexpectedErrMsg(msgType, requestID)
 	}
 }
